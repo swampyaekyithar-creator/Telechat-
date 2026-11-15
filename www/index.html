@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="my">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>AuraLink Lite</title>
+  <style>
+    /* ဖုန်းအငယ်များတွင် 60fps သွက်နေစေရန် Blur ဖြုတ်ထားသော Matte Pill UI */
+    * { box-sizing: border-box; font-family: system-ui, 'Noto Sans Myanmar', sans-serif; }
+    body { margin: 0; background: #070913; color: #f8fafc; display: flex; flex-direction: column; height: 100vh; }
+    header { padding: 12px 16px; background: #0f1629; border-bottom: 1px solid #1e293b; display: flex; justify-content: space-between; align-items: center; }
+    .sub { font-size: 11px; color: #34d399; margin-top: 2px; }
+    #loginBox { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; text-align: center; gap: 14px; }
+    .pill-input { width: 100%; max-width: 280px; background: #111827; border: 1px solid #334155; color: #fff; padding: 12px 18px; border-radius: 999px; outline: none; text-align: center; font-size: 14px; }
+    .btn-primary { background: #4f46e5; color: #fff; border: none; padding: 12px 22px; border-radius: 999px; font-weight: 600; font-size: 14px; cursor: pointer; }
+    #chatScreen { display: none; flex: 1; flex-direction: column; overflow: hidden; }
+    #chatFeed { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+    .msg { max-width: 82%; padding: 10px 14px; border-radius: 22px; font-size: 13px; line-height: 1.5; contain: content; word-wrap: break-word; }
+    .msg.me { align-self: flex-end; background: #3730a3; color: #fff; }
+    .msg.other { align-self: flex-start; background: #131c31; border: 1px solid #26334d; }
+    .meta { font-size: 10px; opacity: 0.7; margin-bottom: 3px; }
+    footer { padding: 10px; background: #0f1629; border-top: 1px solid #1e293b; display: flex; gap: 8px; align-items: center; }
+    #msgInput { flex: 1; background: #070913; border: 1px solid #334155; color: #fff; padding: 10px 16px; border-radius: 999px; outline: none; font-size: 13px; }
+    .btn-icon { background: #1e293b; color: #f472b6; border: none; width: 40px; height: 40px; border-radius: 999px; font-size: 16px; cursor: pointer; flex-shrink: 0; }
+    .btn-send { background: #4f46e5; color: #fff; border: none; padding: 10px 16px; border-radius: 999px; font-weight: 600; font-size: 13px; cursor: pointer; flex-shrink: 0; }
+    audio { height: 32px; max-width: 210px; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <strong>AuraLink Squad</strong>
+      <div id="statusText" class="sub">Google Account ဖြင့် ဝင်ပါ</div>
+    </div>
+    <button id="logoutBtn" style="display:none;background:#1e293b;color:#cbd5e1;border:none;padding:6px 12px;border-radius:999px;font-size:11px;">ထွက်မည်</button>
+  </header>
+
+  <!-- Login မျက်နှာပြင် -->
+  <section id="loginBox">
+    <div style="font-size:15px;font-weight:600;">သူငယ်ချင်း ၅ ယောက် သီးသန့် Chat</div>
+    <input id="roomCodeInput" class="pill-input" type="text" placeholder="လျှို့ဝှက်ကုဒ် (ဥပမာ aura5599)" value="aura5599" />
+    <button id="googleLoginBtn" class="btn-primary">Google ဖြင့် ဝင်မည်</button>
+    <div id="loginError" style="font-size:12px;color:#fb7185;"></div>
+  </section>
+
+  <!-- Chat မျက်နှာပြင် -->
+  <section id="chatScreen">
+    <main id="chatFeed"></main>
+    <footer>
+      <button id="micBtn" class="btn-icon" title="အသံပို့ရန်">🎙️</button>
+      <input id="msgInput" type="text" placeholder="စာရိုက်ပါ..." />
+      <button id="sendBtn" class="btn-send">ပို့မည်</button>
+    </footer>
+  </section>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+    import { getDatabase, ref, push, query, limitToLast, onChildAdded } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+    // 🔴 ၁။ သင့် Firebase Project Settings ထဲမှ Config ကို ဒီနေရာတွင် အစားထိုးပါ
+    const firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_PROJECT.firebaseapp.com",
+      databaseURL: "https://YOUR_PROJECT-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "YOUR_PROJECT"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getDatabase(app);
+    const provider = new GoogleAuthProvider();
+
+    let currentUser = null;
+    let activeRoom = "aura5599";
+    let isListening = false;
+    const appStartTime = Date.now();
+
+    // Google Login နှိပ်သည့်အခါ
+    document.getElementById("googleLoginBtn").onclick = async () => {
+      activeRoom = document.getElementById("roomCodeInput").value.trim();
+      if (!activeRoom) return;
+      if ("Notification" in window) await Notification.requestPermission();
+      try {
+        await signInWithPopup(auth, provider);
+      } catch (err) {
+        document.getElementById("loginError").textContent = "Login Error: " + err.message;
+      }
+    };
+
+    document.getElementById("logoutBtn").onclick = () => signOut(auth);
+
+    onAuthStateChanged(auth, (user) => {
+      if (user) {
+        currentUser = user;
+        document.getElementById("loginBox").style.display = "none";
+        document.getElementById("chatScreen").style.display = "flex";
+        document.getElementById("logoutBtn").style.display = "block";
+        document.getElementById("statusText").textContent = "🟢 " + (user.displayName || "Online");
+        if (!isListening) startChatListener();
+      } else {
+        currentUser = null;
+        document.getElementById("loginBox").style.display = "flex";
+        document.getElementById("chatScreen").style.display = "none";
+        document.getElementById("logoutBtn").style.display = "none";
+        document.getElementById("statusText").textContent = "Google Account ဖြင့် ဝင်ပါ";
+      }
+    });
+
+    function escapeText(str) {
+      const div = document.createElement("div");
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    // Real-time Database မှ နောက်ဆုံးစာ ၄၀ ကိုသာ ဆွဲတင်ခြင်း (Low-RAM)
+    function startChatListener() {
+      isListening = true;
+      const feed = document.getElementById("chatFeed");
+      const msgRef = query(ref(db, `rooms/${activeRoom}/messages`), limitToLast(40));
+
+      onChildAdded(msgRef, (snap) => {
+        const m = snap.val();
+        const isMe = m.uid === currentUser.uid;
+        const card = document.createElement("div");
+        card.className = "msg " + (isMe ? "me" : "other");
+
+        if (m.type === "voice" && m.audioData) {
+          card.innerHTML = `<div class="meta">${escapeText(m.name)}</div><audio controls src="${m.audioData}"></audio>`;
+        } else {
+          card.innerHTML = `<div class="meta">${escapeText(m.name)}</div><div>${escapeText(m.text)}</div>`;
+        }
+
+        feed.appendChild(card);
+        feed.scrollTop = feed.scrollHeight;
+
+        // စာအသစ်ဝင်လာလျှင် Notification ပြသခြင်း
+        if (!isMe && m.timestamp > appStartTime && "Notification" in window && Notification.permission === "granted") {
+          new Notification(m.name + " မှ စာပို့လိုက်သည်", {
+            body: m.type === "voice" ? "🎙️ အသံ မက်ဆေ့ချ် ပို့လိုက်ပါသည်" : m.text
+          });
+        }
+      }, (err) => {
+        document.getElementById("statusText").textContent = "🔴 ကုဒ်မှားနေပါသည် (Room Access Denied)";
+      });
+    }
+
+    // စာပို့ခြင်း
+    function sendText() {
+      const input = document.getElementById("msgInput");
+      const text = input.value.trim();
+      if (!text || !currentUser) return;
+      push(ref(db, `rooms/${activeRoom}/messages`), {
+        uid: currentUser.uid,
+        name: currentUser.displayName || "Friend",
+        type: "text",
+        text: text,
+        timestamp: Date.now()
+      });
+      input.value = "";
+    }
+    document.getElementById("sendBtn").onclick = sendText;
+    document.getElementById("msgInput").onkeydown = (e) => { if (e.key === "Enter") sendText(); };
+
+    // အသံဖမ်းပြီး Database ထဲ တိုက်ရိုက်ပို့ခြင်း (24kbps Opus — Storage ဝယ်ရန်မလို)
+    let recorder = null;
+    let audioChunks = [];
+    const micBtn = document.getElementById("micBtn");
+
+    micBtn.onclick = async () => {
+      if (!recorder || recorder.state === "inactive") {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        recorder = new MediaRecorder(stream, { audioBitsPerSecond: 24000 });
+        audioChunks = [];
+        recorder.ondataavailable = (e) => audioChunks.push(e.data);
+        recorder.onstop = () => {
+          const blob = new Blob(audioChunks, { type: "audio/webm" });
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            push(ref(db, `rooms/${activeRoom}/messages`), {
+              uid: currentUser.uid,
+              name: currentUser.displayName || "Friend",
+              type: "voice",
+              audioData: reader.result,
+              timestamp: Date.now()
+            });
+          };
+          reader.readAsDataURL(blob);
+          stream.getTracks().forEach(t => t.stop());
+        };
+        recorder.start();
+        micBtn.textContent = "⏹️";
+        micBtn.style.background = "#be123c";
+      } else {
+        recorder.stop();
+        micBtn.textContent = "🎙️";
+        micBtn.style.background = "#1e293b";
+      }
+    };
+  </script>
+</body>
+  </html>
